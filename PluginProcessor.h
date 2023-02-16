@@ -34,6 +34,7 @@ public:
         attackParam = new juce::AudioParameterFloat("attack", "Attack", 1.0f, 1000.0f, 20.0f);
         releaseParam = new juce::AudioParameterFloat("release", "Release", 10.0f, 10000.0f, 200.0f);
         makeupGainParam = new juce::AudioParameterFloat("makeupGain", "Makeup Gain", -12.0f, 12.0f, 0.0f);
+        kneeWidthParam = new juce::AudioParameterFloat("kneeWidth", "Knee Width", -12.0f, 12.0f, 0.0f);
         
         // Add the parameters to the processor
         //        addParameter(inputGainParam);
@@ -43,6 +44,7 @@ public:
         addParameter(attackParam);
         addParameter(releaseParam);
         addParameter(makeupGainParam);
+        addParameter(kneeWidthParam);
 
         
     }
@@ -103,51 +105,53 @@ public:
     //        }
     //    }
     
-    void processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages) override
+    void processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages) override
     {
         const float threshold = thresholdParam->get();
         const float ratio = ratioParam->get();
         const float attack = attackParam->get();
         const float release = releaseParam->get();
-        const float makeupGain = makeupGainParam->get();
-
+        const float makeupGain = juce::Decibels::decibelsToGain(makeupGainParam->get());
+        
         const int numSamples = buffer.getNumSamples();
         const int numChannels = buffer.getNumChannels();
-        
-        const float maxGainReduction = juce::Decibels::decibelsToGain(-60.0f);
+        const float invNumChannels = 1.0f / static_cast<float> (numChannels);
+        const float T = 1.0f / getSampleRate();
         
         for (int channel = 0; channel < numChannels; ++channel)
         {
             float* channelData = buffer.getWritePointer(channel);
-            float envelope = 0.0f;
-            float gain = 1.0f;
-            float previousGain = 1.0f;
+            
+            float gainSmoothed = 1.0f;
+            float envelopePrev = 0.0f;
             
             for (int i = 0; i < numSamples; ++i)
             {
                 // calculate the envelope of the signal
-                envelope *= 0.999f;
-                envelope = std::max(envelope, std::abs(channelData[i]));
+                float envelope = std::abs(channelData[i]);
                 
-                // calculate gain reduction
-                float dbAboveThreshold = juce::Decibels::gainToDecibels(envelope / threshold);
-                dbAboveThreshold = std::max(-60.0f, dbAboveThreshold);
-                float dbGainReduction = dbAboveThreshold * (1.0f - 1.0f / ratio);
-                dbGainReduction = std::min(0.0f, dbGainReduction);
-                float gainReduction = juce::Decibels::decibelsToGain(dbGainReduction);
-                gainReduction = std::min(gainReduction, maxGainReduction);
-                
-                // calculate gain smoothing
-                float time = envelope > gainReduction * threshold ? attack : release;
-                gain = std::exp(-1.0f / (time * getSampleRate()));
-                gain = std::max(gain, previousGain * 0.999f);
-                previousGain = gain;
+                // calculate the gain reduction
+                float gainReduction = 1.0f;
+                if (envelope > threshold)
+                {
+                    float dbAboveThreshold = juce::Decibels::gainToDecibels(envelope / threshold);
+                    float dbGainReduction = dbAboveThreshold * (1.0f - 1.0f / ratio);
+                    gainReduction = juce::Decibels::decibelsToGain(-dbGainReduction);
+                    
+                    float attackTime = std::max(0.001f, attack / 1000.0f);
+                    float releaseTime = std::max(0.001f, release / 1000.0f);
+                    float time = envelope > envelopePrev ? attackTime : releaseTime;
+                    float gain = std::exp(-T / time);
+                    gainSmoothed += (gain - gainSmoothed) * gainSmoothed;
+                }
+                envelopePrev = envelope;
                 
                 // apply gain reduction and makeup gain
-                channelData[i] *= gainReduction * gain * makeupGain;
+                channelData[i] *= gainReduction * gainSmoothed * makeupGain * invNumChannels;
             }
         }
     }
+
 
     
     //==============================================================================
@@ -171,7 +175,7 @@ public:
     void setCurrentProgram (int index) override;
     const juce::String getProgramName (int index) override;
     void changeProgramName (int index, const juce::String& newName) override;
-    int getNumParameters() override { return 5; }
+    int getNumParameters() override { return 6; }
     
     //==============================================================================
     void getStateInformation(juce::MemoryBlock& destData) override
@@ -209,13 +213,14 @@ public:
     
     
 private:
-    juce::AudioParameterFloat* inputGainParam; // input gain parameter
-    juce::AudioParameterFloat* outputGainParam; // output gain parameter
+//    juce::AudioParameterFloat* inputGainParam; // input gain parameter
+//    juce::AudioParameterFloat* outputGainParam; // output gain parameter
     juce::AudioParameterFloat*  thresholdParam;
     juce::AudioParameterFloat*  ratioParam;
     juce::AudioParameterFloat*  attackParam;
     juce::AudioParameterFloat* releaseParam;
     juce::AudioParameterFloat* makeupGainParam;
+    juce::AudioParameterFloat* kneeWidthParam;
     
     float gainComputer;
     float targetGain;
