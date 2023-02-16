@@ -105,43 +105,46 @@ public:
     //        }
     //    }
     
-    void processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages) override
+    
+    void processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages) override
     {
         const float threshold = thresholdParam->get();
         const float ratio = ratioParam->get();
         const float attack = attackParam->get();
         const float release = releaseParam->get();
-        const float makeupGain = makeupGainParam->get();
+        const float makeupGain = juce::Decibels::decibelsToGain(makeupGainParam->get());
+        
         const int numSamples = buffer.getNumSamples();
         const int numChannels = buffer.getNumChannels();
-
+        
         for (int channel = 0; channel < numChannels; ++channel)
         {
             float* channelData = buffer.getWritePointer(channel);
-
+            
             for (int i = 0; i < numSamples; ++i)
             {
+                // calculate the envelope of the signal
+                float envelope = std::abs(channelData[i]);
+                
                 // apply compression if necessary
-                if (channelData[i] > threshold || channelData[i] < -threshold)
+                if (envelope > threshold)
                 {
-                    // calculate envelope of the signal
-                    float envelope = std::abs(channelData[i]);
-
                     // calculate gain reduction
                     float dbAboveThreshold = juce::Decibels::gainToDecibels(envelope / threshold);
                     float dbGainReduction = dbAboveThreshold * (1.0f - 1.0f / ratio);
                     float gainReduction = juce::Decibels::decibelsToGain(-dbGainReduction);
-
+                    
                     // apply gain reduction with fast attack and release
                     float attackTime = std::max(0.001f, attack / 1000.0f);
                     float releaseTime = std::max(0.001f, release / 1000.0f);
                     float time = envelope > gainReduction * threshold ? attackTime : releaseTime;
                     float gain = std::exp(-1.0f / (time * getSampleRate()));
-                    channelData[i] *= gainReduction * gain;
+                    channelData[i] = std::abs(channelData[i]) * gainReduction * gain * makeupGain;
                 }
-
-                // apply makeup gain
-                channelData[i] *= juce::Decibels::decibelsToGain(makeupGain);
+                else
+                {
+                    channelData[i] *= makeupGain;
+                }
             }
         }
     }
